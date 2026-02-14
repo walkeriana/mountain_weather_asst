@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Mountain Weather Selector v5</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: sans-serif; }
+button { margin: 3px; }
+hr { margin: 15px 0; }
+</style>
+</head>
+<body>
+
+<h2>⛰ 山岳気象選定システム v5</h2>
+
+<h3>📂 データ管理</h3>
+<button onclick="newData()">🆕 新規作成</button>
+<input type="file" id="fileInput">
+<button onclick="downloadJSON()">💾 JSON保存</button>
+
+<hr>
+
+<h3>⛰ 山登録</h3>
+<input type="text" id="mountainName" placeholder="山名">
+<button onclick="searchMountain()">検索</button>
+<br><br>
+
+<label>標高(m)：</label>
+<input type="number" id="elevation"><br><br>
+
+<label>山域：</label>
+<select id="region">
+<option>北アルプス</option>
+<option>南アルプス</option>
+<option>中央アルプス</option>
+<option>八ヶ岳</option>
+<option>奥秩父</option>
+<option>奥多摩</option>
+<option>丹沢</option>
+<option>鈴鹿山脈</option>
+<option>奥羽山脈</option>
+<option>中国山地</option>
+<option>四国山地</option>
+<option>九州山地</option>
+<option>その他</option>
+</select>
+
+<div id="searchResults"></div>
+<button onclick="registerMountain()">登録</button>
+
+<hr>
+
+<h3>🕒 表示時間（日本時間）</h3>
+<input type="datetime-local" id="jstTime">
+
+<hr>
+
+<h3>📋 登録済み山一覧</h3>
+<div id="mountainList"></div>
+
+<script>
+
+let mountains = {};
+let selectedSearchResult = null;
+
+/* 初期時間（現在の00分） */
+window.onload = function(){
+  const now = new Date();
+  now.setMinutes(0);
+  now.setSeconds(0);
+  const iso = now.toISOString().slice(0,16);
+  document.getElementById("jstTime").value = iso;
+};
+
+/* 新規 */
+function newData(){
+  mountains = {};
+  renderList();
+}
+
+/* JSONダウンロード */
+function downloadJSON(){
+  const data = JSON.stringify(mountains, null, 2);
+  const blob = new Blob([data], {type:"application/json;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "mountains.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+/* 読込 */
+document.getElementById("fileInput").addEventListener("change", function(e){
+  const reader = new FileReader();
+  reader.onload = function(evt){
+    mountains = JSON.parse(evt.target.result);
+    renderList();
+  };
+  reader.readAsText(e.target.files[0]);
+});
+
+/* 山検索 */
+async function searchMountain(){
+  const name = document.getElementById("mountainName").value.trim();
+  const url = `https://nominatim.openstreetmap.org/search?format=json&countrycodes=jp&q=${encodeURIComponent(name+" peak")}&addressdetails=1&limit=5`;
+  const res = await fetch(url);
+  const data = await res.json();
+  showSearchResults(data);
+}
+
+/* 候補表示 */
+function showSearchResults(results){
+  const container = document.getElementById("searchResults");
+  container.innerHTML = "";
+
+  results.forEach(async item=>{
+    if(item.class!=="natural"||item.type!=="peak") return;
+
+    const lat=parseFloat(item.lat);
+    const lon=parseFloat(item.lon);
+
+    const prefecture =
+      item.address?.state ||
+      item.address?.region ||
+      item.address?.county ||
+      item.address?.province ||
+      "不明";
+
+    const btn=document.createElement("button");
+    btn.innerText=`${item.display_name.split(",")[0]}（${prefecture}）`;
+
+    btn.onclick=async function(){
+      selectedSearchResult={lat,lon,prefecture};
+
+      const elevRes=await fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lon}`);
+      const elevData=await elevRes.json();
+      document.getElementById("elevation").value=elevData.results[0].elevation;
+
+      container.innerHTML="選択済み ✔";
+    };
+    container.appendChild(btn);
+  });
+}
+
+/* 登録 */
+function registerMountain(){
+  const name=document.getElementById("mountainName").value.trim();
+  if(!selectedSearchResult) return alert("山を検索して選択してください");
+
+  mountains[name]={
+    lat:selectedSearchResult.lat,
+    lon:selectedSearchResult.lon,
+    elevation:parseInt(document.getElementById("elevation").value),
+    prefecture:selectedSearchResult.prefecture,
+    region:document.getElementById("region").value
+  };
+  renderList();
+}
+
+/* 標高→気圧 */
+function autoPressure(elev){
+  if(elev<600) return "950hPa";
+  if(elev<1800) return "850hPa";
+  if(elev<3200) return "700hPa";
+  return "500hPa";
+}
+
+/* JST→UTC */
+function convertToUTC(jst){
+  const date=new Date(jst);
+  date.setHours(date.getHours()-9);
+  return date;
+}
+
+/* earth表示 */
+function openEarth(name,overlay){
+
+  const m=mountains[name];
+  const jst=document.getElementById("jstTime").value;
+  const utc=convertToUTC(jst);
+
+  const yyyy=utc.getUTCFullYear();
+  const mm=String(utc.getUTCMonth()+1).padStart(2,"0");
+  const dd=String(utc.getUTCDate()).padStart(2,"0");
+  const hh=String(utc.getUTCHours()).padStart(2,"0");
+
+  const pressure=autoPressure(m.elevation);
+
+  const url=
+  `https://earth.nullschool.net/jp/#${yyyy}/${mm}/${dd}/${hh}00Z/wind/isobaric/${pressure}/overlay=${overlay}/orthographic=${m.lon},${m.lat},4000/loc=${m.lon},${m.lat}`;
+
+  window.location.href = url;
+}
+
+/* 一覧表示 */
+function renderList(){
+  const container=document.getElementById("mountainList");
+  container.innerHTML="";
+  Object.keys(mountains).forEach(name=>{
+    const m=mountains[name];
+    const div=document.createElement("div");
+
+    div.innerHTML=`<strong>${name}</strong>（${m.prefecture} / ${m.elevation}m）<br>`;
+
+    const overlays=[
+      {label:"🌫 相対湿度",value:"relative_humidity"},
+      {label:"🌡 気温",value:"temp"},
+      {label:"☔ 3時間降水",value:"precip_3hr"},
+      {label:"💧 可降水量",value:"total_precipitable_water"}
+    ];
+
+    overlays.forEach(o=>{
+      const btn=document.createElement("button");
+      btn.innerText=o.label;
+      btn.onclick=()=>openEarth(name,o.value);
+      div.appendChild(btn);
+    });
+
+    container.appendChild(div);
+    container.appendChild(document.createElement("hr"));
+  });
+}
+
+</script>
+
+</body>
+</html>
