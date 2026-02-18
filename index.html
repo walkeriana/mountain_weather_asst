@@ -2,17 +2,19 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Mountain Weather Selector v5</title>
+<title>Mountain Weather Selector v6</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body { font-family: sans-serif; }
 button { margin: 3px; }
 hr { margin: 15px 0; }
+.region-title { font-size: 18px; margin-top:20px; }
+.jump-link { margin-right:10px; }
 </style>
 </head>
 <body>
 
-<h2>⛰ 山岳気象選定システム v5</h2>
+<h2>⛰ 山岳気象選定システム v6</h2>
 
 <h3>📂 データ管理</h3>
 <button onclick="newData()">🆕 新規作成</button>
@@ -56,15 +58,25 @@ hr { margin: 15px 0; }
 
 <hr>
 
+<h3>📌 山域ジャンプ</h3>
+<div id="regionJump"></div>
+
+<hr>
+
+<h3>🆕 最近登録</h3>
+<div id="latest"></div>
+
+<hr>
+
 <h3>📋 登録済み山一覧</h3>
 <div id="mountainList"></div>
 
 <script>
 
-let mountains = {};
+let mountains = [];   // ← 配列構造
 let selectedSearchResult = null;
 
-/* 初期時間（現在の00分） */
+/* 初期時間 */
 window.onload = function(){
   const now = new Date();
   now.setMinutes(0);
@@ -75,11 +87,11 @@ window.onload = function(){
 
 /* 新規 */
 function newData(){
-  mountains = {};
+  mountains = [];
   renderList();
 }
 
-/* JSONダウンロード */
+/* JSON保存 */
 function downloadJSON(){
   const data = JSON.stringify(mountains, null, 2);
   const blob = new Blob([data], {type:"application/json;charset=utf-8"});
@@ -145,18 +157,21 @@ function showSearchResults(results){
   });
 }
 
-/* 登録 */
+/* 登録（先頭追加） */
 function registerMountain(){
   const name=document.getElementById("mountainName").value.trim();
   if(!selectedSearchResult) return alert("山を検索して選択してください");
 
-  mountains[name]={
+  const newMountain = {
+    name:name,
     lat:selectedSearchResult.lat,
     lon:selectedSearchResult.lon,
     elevation:parseInt(document.getElementById("elevation").value),
     prefecture:selectedSearchResult.prefecture,
     region:document.getElementById("region").value
   };
+
+  mountains.unshift(newMountain);   // ← 先頭追加
   renderList();
 }
 
@@ -168,17 +183,23 @@ function autoPressure(elev){
   return "500hPa";
 }
 
-/* JST→UTC */
+/* JST→UTC（完全修正版） */
 function convertToUTC(jst){
-  const date=new Date(jst);
-  date.setHours(date.getHours()-9);
-  return date;
+  const [datePart,timePart]=jst.split("T");
+  const [y,m,d]=datePart.split("-");
+  const [h]=timePart.split(":");
+
+  return new Date(Date.UTC(
+    parseInt(y),
+    parseInt(m)-1,
+    parseInt(d),
+    parseInt(h)-9
+  ));
 }
 
 /* earth表示 */
-function openEarth(name,overlay){
+function openEarth(m,overlay){
 
-  const m=mountains[name];
   const jst=document.getElementById("jstTime").value;
   const utc=convertToUTC(jst);
 
@@ -195,32 +216,70 @@ function openEarth(name,overlay){
   window.location.href = url;
 }
 
-/* 一覧表示 */
+/* 描画 */
 function renderList(){
+
   const container=document.getElementById("mountainList");
+  const latest=document.getElementById("latest");
+  const regionJump=document.getElementById("regionJump");
+
   container.innerHTML="";
-  Object.keys(mountains).forEach(name=>{
-    const m=mountains[name];
-    const div=document.createElement("div");
+  latest.innerHTML="";
+  regionJump.innerHTML="";
 
-    div.innerHTML=`<strong>${name}</strong>（${m.prefecture} / ${m.elevation}m）<br>`;
+  if(mountains.length===0) return;
 
-    const overlays=[
-      {label:"🌫 相対湿度",value:"relative_humidity"},
-      {label:"🌡 気温",value:"temp"},
-      {label:"☔ 3時間降水",value:"precip_3hr"},
-      {label:"💧 可降水量",value:"total_precipitable_water"}
-    ];
+  /* 最新表示 */
+  const newest = mountains[0];
+  latest.innerHTML=`<strong>${newest.name}</strong>（${newest.prefecture} / ${newest.elevation}m）`;
 
-    overlays.forEach(o=>{
-      const btn=document.createElement("button");
-      btn.innerText=o.label;
-      btn.onclick=()=>openEarth(name,o.value);
-      div.appendChild(btn);
+  /* 山域グループ化 */
+  const grouped = {};
+  mountains.forEach(m=>{
+    if(!grouped[m.region]) grouped[m.region]=[];
+    grouped[m.region].push(m);
+  });
+
+  /* ジャンプリンク */
+  Object.keys(grouped).forEach(region=>{
+    const link=document.createElement("a");
+    link.href="#"+region;
+    link.className="jump-link";
+    link.innerText=region;
+    regionJump.appendChild(link);
+  });
+
+  /* 山域ごと表示 */
+  Object.keys(grouped).forEach(region=>{
+    const regionDiv=document.createElement("div");
+    regionDiv.id=region;
+
+    regionDiv.innerHTML=`<div class="region-title">■ ${region}（${grouped[region].length}）</div>`;
+
+    grouped[region].forEach(m=>{
+      const div=document.createElement("div");
+
+      div.innerHTML=`${m.name}（${m.prefecture} / ${m.elevation}m）<br>`;
+
+      const overlays=[
+        {label:"🌫 相対湿度",value:"relative_humidity"},
+        {label:"🌡 気温",value:"temp"},
+        {label:"☔ 3時間降水",value:"precip_3hr"},
+        {label:"💧 可降水量",value:"total_precipitable_water"}
+      ];
+
+      overlays.forEach(o=>{
+        const btn=document.createElement("button");
+        btn.innerText=o.label;
+        btn.onclick=()=>openEarth(m,o.value);
+        div.appendChild(btn);
+      });
+
+      regionDiv.appendChild(div);
+      regionDiv.appendChild(document.createElement("hr"));
     });
 
-    container.appendChild(div);
-    container.appendChild(document.createElement("hr"));
+    container.appendChild(regionDiv);
   });
 }
 
